@@ -6,13 +6,16 @@ One runtime module, `NsInteraction`.
 
 | Type | Role |
 |---|---|
-| `UNsInteractionComponent` | Actor component on the interactor. It owns the queue, resolves the best candidate, and runs it. |
+| `UNsInteractionComponent` | Actor component on the interactor. It owns the queue, the optional view trace, the focus, and the hold. It resolves the best candidate and runs it. |
+| `UNsInteractionPromptWidget` | Abstract prompt widget. Optional parts: `TitleText`, `ActionText`, `KeyBadge`, `KeyText`, `KeyIcon`, `HoldProgressBar`. |
 | `INsInteractable` | Interface on interactable actors: `OnEnter`, `OnExit`, `OnInteract`, `GetInteractionWorldLocation`, `GetInteractionCandidate`, `ExecuteInteractionCandidate`. |
-| `FNsInteractionCandidate` | One option: `TargetActor`, `PromptText`, `PromptWorldLocation`, `Priority`, `Action`. |
+| `FNsInteractionCandidate` | One option: `TargetActor`, `TargetComponent`, `TitleText`, `PromptText`, `bEnabled`, `Input`, `HoldSeconds`, `Authority`, `PromptWorldLocation`, `Priority`, `Action`, `TapAction`. |
 | `FNsInteractionAction` | A native `TFunction<bool(AActor*)>` or a Blueprint dynamic delegate. Native wins when both are set. |
 | `FNsResolvedInteraction` | `bHasInteraction`, the winning `Candidate`, and all valid `Candidates` sorted best first. |
 | `ENsInteractionPriority` | `Low` (0), `Normal` (1), `High` (2), `Critical` (3). |
-| `UNsInteractionCandidateLibrary` | Blueprint helper `SetCandidateAction`. |
+| `ENsInteractionInput` | `Press` or `Hold`. |
+| `ENsInteractionAuthority` | `Local` or `Authority`. |
+| `UNsInteractionCandidateLibrary` | Blueprint helpers `SetCandidateAction` and `SetCandidateTapAction`. |
 
 ### Resolve flow
 
@@ -35,11 +38,26 @@ If any candidate is inside CloseIntentDistanceCm:
     add 100000 to every candidate outside it
 ```
 
+### View trace flow
+
+1. The tick traces from the view source along its forward vector, when the owner is a locally controlled pawn or not a pawn.
+2. The hit actor is the only queued actor. The hit becomes the focus.
+3. `RefreshInteraction` resolves and stores the result. `OnInteractionChanged` fires when the target, the part, the texts, the input, or the enable state change.
+4. A change of target or part cancels a hold.
+
+### Input flow
+
+1. `BeginInteract` takes the stored result. Without the view trace, it resolves first.
+2. A hold candidate starts the hold. The tick runs the candidate when `GetHoldProgress` reaches 1.
+3. `EndInteract` before the end cancels the hold and runs `TapAction`.
+4. To run a candidate: a disabled one does nothing. An `Authority` candidate on a client fires `OnAuthorityRequest`. Any other runs through the interact flow below.
+5. `InteractAsAuthority` sets the focus to the requested part, resolves, and runs an enabled candidate for the requested target.
+
 ### Interact flow
 
 `Interact` calls `InteractResolved`, which resolves the queue and calls `InteractWithResolvedInteraction`:
 
-1. Stop if there is no candidate.
+1. Stop if there is no candidate, or if the candidate is disabled.
 2. Log an error and stop if the target left the queue, is out of range, or is not interactable.
 3. If the candidate has an action, run it. Log an error if it returns false.
 4. If not, call `ExecuteInteractionCandidate` on the target.
@@ -47,7 +65,7 @@ If any candidate is inside CloseIntentDistanceCm:
 
 ## Lifetime
 
-- The component does not tick.
+- The component ticks only while `bUseViewTrace` is on, or during a hold.
 - The queue changes only through the overlap handlers, `AddToInteractionQueue`, `RemoveFromInteractionQueue`, `ClearInteractionQueue`, and `SyncInteractionQueue`.
 - `SyncInteractionQueue` removes destroyed actors.
 - `ResolveInteractionOwner` falls back to the typed outer when there is no owner. Tests use this.
@@ -63,16 +81,17 @@ If any candidate is inside CloseIntentDistanceCm:
 
 ## Dependencies
 
-`Core`, `CoreUObject`, `Engine`, `Slate`, `SlateCore`. No other studio plugin.
+`Core`, `CoreUObject`, `Engine`, `UMG`, `Slate`, `SlateCore`. No other studio plugin.
 
 ## Performance
 
 - Each resolve calls `GetInteractionCandidate` on every queued actor and sorts the result.
 - Keep the queue small with a tight sensor. Resolve on queue changes or on a timer, not every frame.
+- The view trace queues one actor at most, so its resolve every frame calls one `GetInteractionCandidate`.
 
 ## Networking
 
-None. The queue and the resolve are local to each machine. A game that needs server authority must call `Interact` on the server.
+None of its own. The queue and the resolve are local to each machine. An `Authority` candidate on a client fires `OnAuthorityRequest`. The game sends a server RPC, checks it, and calls `InteractAsAuthority` on the server.
 
 ## Testing
 
@@ -87,4 +106,4 @@ NsInteraction has no automated tests. Manual test path:
 
 - Keep the interface signatures stable. Blueprints in projects implement them.
 - The native fast path (`Cast<INsInteractable>` then `_Implementation`) skips Blueprint overrides on C++ classes. A fix changes behavior for current projects. Use Plugin Feature Fit before a change.
-- Move the `LogTemp` summary log to `LogNsInteraction` in the next change to the component.
+- New candidate fields keep a default that matches the old behavior: enabled, press, local.

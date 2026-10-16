@@ -1,10 +1,13 @@
-// Copyright (C) 2025 nulled.softworks. All rights reserved.
+﻿// Copyright (C) 2025 nulled.softworks. All rights reserved.
 
 #include "NsInteractionComponent.h"
 
 #include "NsInteractable.h"
 
+#include "Components/PrimitiveComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogNsInteraction, Log, All);
 
@@ -32,19 +35,196 @@ static bool IsScoredCandidatePreferred(const FNsScoredInteractionCandidate& Cand
     return Candidate.StableOrder < CurrentBest.StableOrder;
 }
 
+static bool IsControlledHere(const AActor* OwnerActor)
+{
+    const APawn* const Pawn = Cast<APawn>(OwnerActor);
+    return Pawn == nullptr || Pawn->IsLocallyControlled();
+}
+
 UNsInteractionComponent::UNsInteractionComponent()
     : InteractionRadiusCm(120.f)
+    , bUseViewTrace(false)
+    , ViewTraceDistanceCm(300.f)
+    , ViewTraceChannel(ECC_Visibility)
     , bLogInteractionResolution(false)
     , CloseIntentDistanceCm(35.f)
     , PriorityScoreStepCm(24.f)
     , FacingScoreWeightCm(32.f)
 {
-    PrimaryComponentTick.bCanEverTick = false;
+    PrimaryComponentTick.bCanEverTick = true;
+    PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
 void UNsInteractionComponent::BeginPlay()
 {
     Super::BeginPlay();
+    SetComponentTickEnabled(bUseViewTrace);
+}
+
+void UNsInteractionComponent::TickComponent(const float DeltaTime, const ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+    if (bUseViewTrace && IsControlledHere(ResolveInteractionOwner()))
+    {
+        RefreshFromView();
+    }
+
+    if (HoldCandidate.IsSet() && GetHoldProgress() >= 1.f)
+    {
+        const FNsInteractionCandidate Candidate = HoldCandidate.GetValue();
+        HoldCandidate.Reset();
+        SetComponentTickEnabled(bUseViewTrace);
+        RunCandidate(Candidate);
+    }
+}
+
+void UNsInteractionComponent::SetViewSource(USceneComponent* const InViewSource)
+{
+    ViewSource = InViewSource;
+}
+
+void UNsInteractionComponent::RefreshFromView()
+{
+    FocusHit = FHitResult();
+    UWorld* const World = GetWorld();
+    if (IsValid(ViewSource) && World != nullptr)
+    {
+        const FVector Start = ViewSource->GetComponentLocation();
+        const FVector End = Start + ViewSource->GetForwardVector() * ViewTraceDistanceCm;
+        const FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NsInteractionView), false, ResolveInteractionOwner());
+        World->LineTraceSingleByChannel(FocusHit, Start, End, ViewTraceChannel, QueryParams);
+    }
+
+    TArray<AActor*> Targets;
+    if (AActor* const FocusActor = FocusHit.GetActor())
+    {
+        Targets.Add(FocusActor);
+    }
+
+    SyncInteractionQueue(Targets);
+    RefreshInteraction();
+}
+
+void UNsInteractionComponent::RefreshInteraction()
+{
+    const FNsResolvedInteraction Resolved = ResolveCurrentInteraction();
+    const bool bChanged = Resolved.bHasInteraction != CurrentInteraction.bHasInteraction
+        || (Resolved.bHasInteraction && !Resolved.Candidate.ShowsSame(CurrentInteraction.Candidate));
+    CurrentInteraction = Resolved;
+    if (!bChanged)
+    {
+        return;
+    }
+
+    // A hold ends when the player looks at something else
+    if (HoldCandidate.IsSet() && !(Resolved.bHasInteraction && Resolved.Candidate.TargetActor == HoldCandidate->TargetActor
+        && Resolved.Candidate.TargetComponent == HoldCandidate->TargetComponent))
+    {
+        HoldCandidate.Reset();
+        SetComponentTickEnabled(bUseViewTrace);
+    }
+
+    OnInteractionChanged.Broadcast(CurrentInteraction);
+}
+
+UPrimitiveComponent* UNsInteractionComponent::GetFocusComponent() const
+{
+    return FocusHit.GetComponent();
+}
+
+UPrimitiveComponent* UNsInteractionComponent::GetFocusComponentOf(const AActor* const Interactor)
+{
+    const UNsInteractionComponent* const Component = IsValid(Interactor) ? Interactor->FindComponentByClass<UNsInteractionComponent>() : nullptr;
+    return Component != nullptr ? Component->GetFocusComponent() : nullptr;
+}
+
+bool UNsInteractionComponent::BeginInteract()
+{
+    if (!bUseViewTrace)
+    {
+        RefreshInteraction();
+    }
+
+    if (!CurrentInteraction.bHasInteraction)
+    {
+        return false;
+    }
+
+    const FNsInteractionCandidate& Candidate = CurrentInteraction.Candidate;
+    if (Candidate.Input == ENsInteractionInput::Hold)
+    {
+        HoldCandidate = Candidate;
+        HoldStartSeconds = GetWorld()->GetTimeSeconds();
+        SetComponentTickEnabled(true);
+        return true;
+    }
+
+    RunCandidate(Candidate);
+    return true;
+}
+
+void UNsInteractionComponent::EndInteract()
+{
+    if (!HoldCandidate.IsSet())
+    {
+        return;
+    }
+
+    // The hold did not finish, so the press was a tap
+    const FNsInteractionCandidate Candidate = HoldCandidate.GetValue();
+    HoldCandidate.Reset();
+    SetComponentTickEnabled(bUseViewTrace);
+    if (Candidate.TapAction.IsBound())
+    {
+        Candidate.TapAction.Execute(ResolveInteractionOwner());
+    }
+}
+
+float UNsInteractionComponent::GetHoldProgress() const
+{
+    if (!HoldCandidate.IsSet() || GetWorld() == nullptr)
+    {
+        return 0.f;
+    }
+
+    return FMath::Clamp(static_cast<float>(GetWorld()->GetTimeSeconds() - HoldStartSeconds) / FMath::Max(HoldCandidate->HoldSeconds, KINDA_SMALL_NUMBER), 0.f, 1.f);
+}
+
+bool UNsInteractionComponent::InteractAsAuthority(AActor* const TargetActor, UPrimitiveComponent* const TargetComponent)
+{
+    // The candidate builds from the requested part, the same way it built on the client
+    FocusHit = FHitResult();
+    FocusHit.HitObjectHandle = FActorInstanceHandle(TargetActor);
+    FocusHit.Component = TargetComponent;
+    SyncInteractionQueue({ TargetActor });
+    const FNsResolvedInteraction Resolved = ResolveCurrentInteraction();
+    if (!Resolved.bHasInteraction || Resolved.Candidate.TargetActor != TargetActor || !Resolved.Candidate.bEnabled)
+    {
+        return false;
+    }
+
+    InteractWithResolvedInteraction(Resolved);
+    return true;
+}
+
+void UNsInteractionComponent::RunCandidate(const FNsInteractionCandidate& Candidate)
+{
+    if (!Candidate.bEnabled)
+    {
+        return;
+    }
+
+    const AActor* const OwnerActor = ResolveInteractionOwner();
+    if (Candidate.Authority == ENsInteractionAuthority::Authority && OwnerActor != nullptr && !OwnerActor->HasAuthority())
+    {
+        OnAuthorityRequest.Broadcast(Candidate);
+        return;
+    }
+
+    FNsResolvedInteraction Resolved;
+    Resolved.bHasInteraction = true;
+    Resolved.Candidate = Candidate;
+    InteractWithResolvedInteraction(Resolved);
 }
 
 void UNsInteractionComponent::AddToInteractionQueue(AActor* const InActor)
@@ -168,7 +348,7 @@ FNsResolvedInteraction UNsInteractionComponent::ResolveCurrentInteraction() cons
     const FNsResolvedInteraction ResolvedInteraction = ResolveInteractionCandidates(Candidates);
     if (bLogInteractionResolution)
     {
-        UE_LOG(LogTemp, Log, TEXT("NsInteraction on %s resolved %s from %d candidates."),
+        UE_LOG(LogNsInteraction, Log, TEXT("NsInteraction on %s resolved %s from %d candidates."),
             *GetNameSafe(OwnerActor),
             ResolvedInteraction.bHasInteraction ? *GetNameSafe(ResolvedInteraction.Candidate.TargetActor) : TEXT("none"),
             Candidates.Num());
@@ -297,7 +477,7 @@ void UNsInteractionComponent::InteractResolved()
 
 void UNsInteractionComponent::InteractWithResolvedInteraction(const FNsResolvedInteraction& ResolvedInteraction)
 {
-    if (!ResolvedInteraction.bHasInteraction)
+    if (!ResolvedInteraction.bHasInteraction || !ResolvedInteraction.Candidate.bEnabled)
     {
         return;
     }
