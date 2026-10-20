@@ -2,108 +2,68 @@
 
 ## Architecture
 
-One runtime module, `NsInteraction`.
+One runtime module, `NsInteraction`. Four public headers:
 
-| Type | Role |
+| Header | Content |
 |---|---|
-| `UNsInteractionComponent` | Actor component on the interactor. It owns the queue, the optional view trace, the focus, and the hold. It resolves the best candidate and runs it. |
-| `UNsInteractionPromptWidget` | Abstract prompt widget. Optional parts: `TitleText`, `ActionText`, `KeyBadge`, `KeyText`, `KeyIcon`, `HoldProgressBar`. |
-| `INsInteractable` | Interface on interactable actors: `OnEnter`, `OnExit`, `OnInteract`, `GetInteractionWorldLocation`, `GetInteractionCandidate`, `ExecuteInteractionCandidate`. |
-| `FNsInteractionCandidate` | One option: `TargetActor`, `TargetComponent`, `TitleText`, `PromptText`, `bEnabled`, `Input`, `HoldSeconds`, `Authority`, `PromptWorldLocation`, `Priority`, `Action`, `TapAction`. |
-| `FNsInteractionAction` | A native `TFunction<bool(AActor*)>` or a Blueprint dynamic delegate. Native wins when both are set. |
-| `FNsResolvedInteraction` | `bHasInteraction`, the winning `Candidate`, and all valid `Candidates` sorted best first. |
-| `ENsInteractionPriority` | `Low` (0), `Normal` (1), `High` (2), `Critical` (3). |
-| `ENsInteractionInput` | `Press` or `Hold`. |
-| `ENsInteractionAuthority` | `Local` or `Authority`. |
-| `UNsInteractionCandidateLibrary` | Blueprint helpers `SetCandidateAction` and `SetCandidateTapAction`. |
+| `NsInteractionTypes.h` | `FNsInteractionTarget`, `FNsInteractionOption`, `ENsInteractionInput`, `ENsInteractionAuthority` |
+| `NsInteractable.h` | `INsInteractable`: `GetInteractionOption`, `ExecuteInteraction`, `OnInteractorEnter`, `OnInteractorExit` |
+| `NsInteractionComponent.h` | `UNsInteractionComponent`: the targets, the best option, the press and the hold, the server request |
+| `NsInteractionViewSensor.h` | `UNsInteractionViewSensor`: the view trace and the aim assist |
 
-### Resolve flow
+Data flow:
 
-1. For each valid queued actor, call `GetInteractionCandidate`. If `TargetActor` is null, set it to the queued actor.
-2. Discard candidates with an invalid target or empty `PromptText`.
-3. Distance is measured from the owner to `PromptWorldLocation`, or to the root component location if that is zero.
-4. Discard candidates beyond `InteractionRadiusCm`, when the radius is above 0.
-5. Score each candidate. A lower score is better.
-6. Sort by score, then distance, then queue order.
+1. A sensor calls `SetTargets`, `AddTarget`, or `RemoveTarget`.
+2. `SetTargets` sends `OnInteractorEnter` to a new actor and `OnInteractorExit` to an actor that left. Then it calls `Refresh`.
+3. `Refresh` calls `QueryOption` for each target in reach, scores each option with `ScoreOption`, and keeps the best one. A tie keeps the first target.
+4. `OnOptionChanged` fires when `ShowsSame` says that the shown prompt changed.
+5. `BeginInteract` refreshes, then runs a press option or starts a hold. `EndInteract` before the end of a hold runs `TapActionId`.
+6. To run an action: a disabled option does nothing. A `Server` option on a client fires `OnServerRequest`. Any other option calls `ExecuteInteraction`.
+7. `ExecuteOnServer` builds the option again from the requested target and runs the requested action, when the option names that action.
 
-### Score formula
+View sensor flow:
 
-```text
-Facing = (1 - dot(OwnerForward2D, ToCandidate2D)) * FacingScoreWeightCm
-If Distance <= CloseIntentDistanceCm:
-    Score = Distance + Facing
-Else:
-    Score = Distance + Facing - (PriorityValue - 1) * PriorityScoreStepCm
-If any candidate is inside CloseIntentDistanceCm:
-    add 100000 to every candidate outside it
-```
-
-### View trace flow
-
-1. The tick traces from the view source along its forward vector, when the owner is a locally controlled pawn or not a pawn.
-2. The hit actor is the only queued actor. The hit becomes the focus.
-3. `RefreshInteraction` resolves and stores the result. `OnInteractionChanged` fires when the target, the part, the texts, the input, or the enable state change.
-4. A change of target or part cancels a hold.
-
-### Input flow
-
-1. `BeginInteract` takes the stored result. Without the view trace, it resolves first.
-2. A hold candidate starts the hold. The tick runs the candidate when `GetHoldProgress` reaches 1.
-3. `EndInteract` before the end cancels the hold and runs `TapAction`.
-4. To run a candidate: a disabled one does nothing. An `Authority` candidate on a client fires `OnAuthorityRequest`. Any other runs through the interact flow below.
-5. `InteractAsAuthority` sets the focus to the requested part, resolves, and runs an enabled candidate for the requested target.
-
-### Interact flow
-
-`Interact` calls `InteractResolved`, which resolves the queue and calls `InteractWithResolvedInteraction`:
-
-1. Stop if there is no candidate, or if the candidate is disabled.
-2. Log an error and stop if the target left the queue, is out of range, or is not interactable.
-3. If the candidate has an action, run it. Log an error if it returns false.
-4. If not, call `ExecuteInteractionCandidate` on the target.
-5. If that returns false, call `OnInteract` on the target.
+1. Each tick on the machine that controls the owner, the sensor traces along the view source.
+2. The hit part takes the focus when its actor gives an option.
+3. Else, with `AssistAngleDeg` above 0, a sphere overlap collects the interactable parts that block the channel. `MeasureViewAngle` finds the point of the local bounds box nearest to the view line with a ternary search. A sight trace drops a part behind another actor.
+4. The parts sort by angle. The focused part gets `AssistStickDeg` of bonus. The first part with an option takes the focus.
+5. The sensor calls `SetTargets` with the focus, or `ClearTargets`.
 
 ## Lifetime
 
-- The component ticks only while `bUseViewTrace` is on, or during a hold.
-- The queue changes only through the overlap handlers, `AddToInteractionQueue`, `RemoveFromInteractionQueue`, `ClearInteractionQueue`, and `SyncInteractionQueue`.
-- `SyncInteractionQueue` removes destroyed actors.
-- `ResolveInteractionOwner` falls back to the typed outer when there is no owner. Tests use this.
+- The component ticks only during a hold, or while `RefreshInterval` is above 0 and targets exist.
+- `EndPlay` clears the targets, so each actor gets its exit.
+- The view sensor ticks every frame. `BeginPlay` finds the interaction component on the owner when none is set.
 
 ## Extension Points
 
-| Point | Use |
-|---|---|
-| `INsInteractable` events | `BlueprintNativeEvent`. Implement in C++ or Blueprint. |
-| `FNsInteractionAction` | Bind per candidate, so one actor can offer different actions. |
-| `ResolveInteractionCandidates` | Public. A game can resolve its own candidate list with the same rules. |
-| Component settings | Tune the radius and the score weights per interactor. |
+- `INsInteractable`: the game implements it on any actor, in C++ or in Blueprint.
+- `ScoreOption`: override it in a child class of the component.
+- `OnOptionChanged` and `OnServerRequest`: the adapters of the game bind them for the UI and for the network.
+- A custom sensor: any code can call `SetTargets`.
+- `QueryOption`: a static call that game code can use for its own checks.
 
 ## Dependencies
 
-`Core`, `CoreUObject`, `Engine`, `UMG`, `Slate`, `SlateCore`. No other studio plugin.
+`Core`, `CoreUObject`, and `Engine`. No other plugin.
 
 ## Performance
 
-- Each resolve calls `GetInteractionCandidate` on every queued actor and sorts the result.
-- Keep the queue small with a tight sensor. Resolve on queue changes or on a timer, not every frame.
-- The view trace queues one actor at most, so its resolve every frame calls one `GetInteractionCandidate`.
+- `Refresh` calls `GetInteractionOption` once for each target.
+- The view sensor calls `GetInteractionOption` once for the exact hit. With the aim assist and no exact option, it adds one sphere overlap, one sight trace for each part near the view, and one `GetInteractionOption` for each part in the cone until one answers.
+- The view sensor calls `SetTargets`, which refreshes, so a frame with a focus calls `GetInteractionOption` one more time.
 
 ## Networking
 
-None of its own. The queue and the resolve are local to each machine. An `Authority` candidate on a client fires `OnAuthorityRequest`. The game sends a server RPC, checks it, and calls `InteractAsAuthority` on the server.
+The plugin does not replicate. `OnServerRequest` gives the game what it must send to the server. `ExecuteOnServer` runs it there. `IsPartInView` lets the server check a client aim, with `ExtraAngleDeg` for the lag of the replicated view.
 
 ## Testing
 
-NsInteraction has no automated tests. Manual test path:
-
-1. Put two interactables at different distances. Make sure that the closer one wins.
-2. Set the far one to `Critical`. Make sure that it wins when neither is inside `CloseIntentDistanceCm`.
-3. Walk inside `CloseIntentDistanceCm` of the other one. Make sure that it wins again.
-4. Turn on `bLogInteractionResolution` and read the discard reasons.
+- `NsInteraction.ViewSensor.AimAssist`: the exact aim, the assist cone, the extra angle, the reach, a large part, and a wall in front.
+- `AActor::ProcessEvent` runs interface events only in a world with initialized actors. A test world calls `InitializeActorsForPlay` before it asks for options.
 
 ## Change Rules
 
-- Keep the interface signatures stable. Blueprints in projects implement them.
-- The native fast path (`Cast<INsInteractable>` then `_Implementation`) skips Blueprint overrides on C++ classes. A fix changes behavior for current projects. Use Plugin Feature Fit before a change.
-- New candidate fields keep a default that matches the old behavior: enabled, press, local.
+- Keep `INsInteractable` and `FNsInteractionOption` stable. Every interactable of every game uses them.
+- Add a new option field with a default that keeps the current behavior.
+- Keep the plugin free of other plugins. A link to another plugin goes into the game, as an adapter.

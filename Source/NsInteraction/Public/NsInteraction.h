@@ -5,11 +5,7 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
+/** Module of NsInteraction. It has no startup work */
 class FNsInteractionModule : public IModuleInterface
 {
-public:
-
-	/** IModuleInterface implementation */
-	virtual void StartupModule() override;
-	virtual void ShutdownModule() override;
 };

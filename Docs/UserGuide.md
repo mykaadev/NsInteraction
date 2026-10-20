@@ -2,135 +2,138 @@
 
 ## Purpose
 
-NsInteraction lets an actor, usually the player, interact with nearby actors. It keeps a queue of nearby interactables, picks the best one by distance, facing, and priority, and runs its action.
+NsInteraction lets an actor, usually the player, use other actors. A sensor gives the targets. The interaction component asks each target for its option, keeps the best one, and runs it on a press or at the end of a hold.
 
-It also has an optional view trace for first-person aim, a press or hold input, and a prompt widget base that a Widget Blueprint styles.
-
-NsInteraction does not replicate. An action that needs the server sends a request event, and the game sends the server call.
+NsInteraction has no UI, no input binding, and no replication. The game shows the prompt, binds the input, and sends server requests. NsInteraction depends on no other plugin.
 
 ## Setup
 
-1. Add `NsInteraction` to the `Plugins` list of the `.uproject` file.
-2. For C++, add `"NsInteraction"` to the module dependencies in `Build.cs`.
+1. Enable `NsInteraction` in the `.uproject` file.
+2. Add `NsInteraction` to the module dependencies of the game.
+3. Add a `UNsInteractionComponent` to the actor that interacts.
+4. Pick a sensor:
+   - Aim: add a `UNsInteractionViewSensor` and call `SetViewSource` with the camera.
+   - Nearby: add a sphere or box collision. Bind its overlap events to `HandleSensorBeginOverlap` and `HandleSensorEndOverlap`.
+   - Game code: call `AddTarget`, `RemoveTarget`, or `SetTargets`.
+5. Call `BeginInteract` when the input starts and `EndInteract` when it ends.
+
+The plugin has no project settings.
 
 ## Quick Start
 
-### 1. The interactor
-
-1. Add a `NsInteractionComponent` to the player pawn.
-2. Pick a sensor:
-   - Aim: turn on `bUseViewTrace` and call `SetViewSource` with the camera. The component traces every frame on the controlling machine.
-   - Nearby: add a sphere or box collision component. Bind its overlap events to `HandleInteractionSensorBeginOverlap` and `HandleInteractionSensorEndOverlap`.
-3. Call `BeginInteract` when the interact input starts and `EndInteract` when it ends. `Interact` still works for a press-only setup.
-
-### 2. The interactable
-
-Implement the `NsInteractable` interface on an actor. Override `GetInteractionCandidate`.
+C++ interactable:
 
 ```cpp
-bool AMySlotMachine::GetInteractionCandidate_Implementation(AActor* const InActor, FNsInteractionCandidate& OutCandidate)
+UCLASS()
+class AMyLever : public AActor, public INsInteractable
 {
-    OutCandidate.TargetActor = this;
-    OutCandidate.PromptText = NSLOCTEXT("SlotMachine", "Play", "Play");
-    OutCandidate.Action.BindNative([this](AActor* const Interactor)
+    GENERATED_BODY()
+
+public:
+    //~ Begin INsInteractable Interface
+    virtual bool GetInteractionOption_Implementation(class AActor* Interactor, class UPrimitiveComponent* Part, FNsInteractionOption& OutOption) override
     {
-        return TryPlay(Interactor);
-    });
-    return true;
-}
+        OutOption.Prompt = NSLOCTEXT("MyGame", "PullLever", "Pull the lever");
+        return true;
+    }
+
+    virtual bool ExecuteInteraction_Implementation(class AActor* Interactor, const FNsInteractionOption& Option) override
+    {
+        bPulled = !bPulled;
+        return true;
+    }
+    //~ End INsInteractable Interface
+
+    /** True after the pull */
+    bool bPulled = false;
+};
 ```
 
-In Blueprint, fill the candidate, then call `Set Interaction Candidate Action` with a custom event.
-
-### 3. The prompt
-
-1. Make a Widget Blueprint based on `NsInteractionPromptWidget`.
-2. Add any of these parts with these names: `TitleText`, `ActionText`, `KeyBadge`, `KeyText`, `KeyIcon`, `HoldProgressBar`. Each part is optional.
-3. Bind `OnInteractionChanged` on the component to `ShowInteraction` on the widget.
-4. Each frame of a hold, call `SetHoldProgress` with `GetHoldProgress`.
-5. Call `SetKey` with the key text or icon from your input system.
-6. Override `OnPromptShown` and `OnHoldProgressChanged` to add a style, such as a grey color for a disabled prompt.
+Blueprint interactable: add the `NsInteractable` interface in Class Settings. Implement `Get Interaction Option` and `Execute Interaction`.
 
 ## Common Tasks
 
-### Show a prompt without the widget base
+### Show a prompt
 
-1. With the view trace, read `GetCurrentInteraction` or bind `OnInteractionChanged`. With an overlap sensor, call `RefreshInteraction` when the queue changes.
-2. If `bHasInteraction` is true, show `Candidate.TitleText` and `Candidate.PromptText`.
-3. Put the prompt at `Candidate.PromptWorldLocation`. If it is zero, use the target actor location.
+Bind `OnOptionChanged`. It gives `bHasOption` and the option. Show `Option.Title`, `Option.Prompt`, and `Option.PromptLocation`. Read `GetHoldProgress` each frame for a hold bar.
 
-### Show why an action is not available
+### Offer more than one action
 
-Set `bEnabled` to false and put the reason in `PromptText`. The prompt shows, and the input runs nothing.
-
-### Aim at one part of an actor
-
-With the view trace, call `UNsInteractionComponent::GetFocusComponentOf(InActor)` in `GetInteractionCandidate`. Return false when the aimed part has no action. Set `TargetComponent` to that part.
+Give each action a name in `ActionId`. `ExecuteInteraction` reads `Option.ActionId` and runs that action. Return a different option for each part of the actor. The `Part` argument names the part that the sensor found.
 
 ### Hold to interact
 
-Set `Input` to `Hold` and `HoldSeconds` to the hold time. The action runs when the hold ends. A short press runs `TapAction`, when it is bound.
+Set `Input` to `Hold` and `HoldSeconds` to the hold time. The action runs when the hold ends. Set `TapActionId` to run another action on a short press.
+
+### Show an action that is not available
+
+Set `bEnabled` to false and put the reason in `Prompt`. The prompt shows, and the input runs nothing.
 
 ### Run an action on the server
 
-Set `Authority` to `Authority`. On a client, the component fires `OnAuthorityRequest` with the candidate. Send `TargetActor` and `TargetComponent` in a server RPC. Check the request on the server, then call `InteractAsAuthority`. On the server, the action runs at once.
+1. Set `Authority` to `Server` on the option.
+2. Bind `OnServerRequest`. It fires on a client, with the option and the action name.
+3. Send `Option.Target.Actor`, `Option.Target.Part`, and `Option.ActionId` in a server RPC of the game.
+4. On the server, check the request, for example with `UNsInteractionViewSensor::IsPartInView`.
+5. Call `ExecuteOnServer`. The option builds again on the server, so the server state decides.
 
-### Offer two actions on one actor
+### Make the aim forgiving
 
-Return the action that fits the current state from `GetInteractionCandidate`. Use `Priority` to win over nearby actors when the intent is not clear.
+Set `AssistAngleDeg` on the view sensor, for example to 8. When the exact aim gives no option, the part nearest to the view direction in that cone takes the focus. `AssistStickDeg` keeps the focused part, so two close parts do not flicker.
 
-### Use a custom sensor
+### Change how the best option wins
 
-Call `SyncInteractionQueue` with the list of nearby actors. The component adds new ones and removes missing ones.
-
-### React when the player comes near
-
-Override `OnEnter` and `OnExit` on the interactable. They run when the actor enters and leaves the queue.
+Make a child class of `UNsInteractionComponent` and override `ScoreOption`. The highest score wins. The default score prefers a higher `Priority`, then a nearer target.
 
 ## Rules
 
-- Set `PromptText` on every candidate. A candidate with empty text is discarded.
-- Return false from `GetInteractionCandidate` when the actor has nothing to show. Return a disabled candidate when it must show a reason.
-- Return true from the action only when the interaction ran. False logs an error.
-- Do not add the owner actor to its own queue. The component skips it.
+- Return false from `GetInteractionOption` when the part has no action now.
+- A part needs a collision that blocks `TraceChannel` to take the aim.
+- Do not change game state in `GetInteractionOption`. The component calls it often.
+- On a client, a `Server` option does nothing until the game sends the request.
 
 ## Settings
 
-On `FNsInteractionCandidate`:
-
-| Field | Default | Effect |
-|---|---|---|
-| `TitleText` | empty | A short name of the target, above the prompt. |
-| `TargetComponent` | null | The part that the candidate is for. |
-| `bEnabled` | true | False shows the prompt and runs nothing. |
-| `Input` | Press | `Press` runs at once. `Hold` waits for `HoldSeconds`. |
-| `HoldSeconds` | 0.5 | The hold time of a hold candidate. |
-| `Authority` | Local | `Authority` asks the server through `OnAuthorityRequest` on a client. |
-| `TapAction` | unbound | Runs on a short press of a hold candidate. |
-
-On `NsInteractionComponent`:
+On `UNsInteractionComponent`:
 
 | Setting | Default | Effect |
 |---|---|---|
-| `InteractionRadiusCm` | 120 | The maximum distance for prompts and interaction. 0 means no limit. |
-| `bUseViewTrace` | false | Traces from the view source every frame on the controlling machine. |
-| `ViewTraceDistanceCm` | 300 | The length of the view trace. |
-| `ViewTraceChannel` | Visibility | The channel of the view trace. |
-| `CloseIntentDistanceCm` | 35 | A candidate this close wins by distance and facing only. Priority is ignored. |
-| `PriorityScoreStepCm` | 24 | The distance that one priority step is worth. |
-| `FacingScoreWeightCm` | 32 | The maximum penalty when the interactor faces away. |
-| `bLogInteractionResolution` | false | Logs each resolve and each discarded candidate. |
+| `RefreshInterval` | 0 | Seconds between two refreshes while there are targets. 0 refreshes only when the targets change or the input starts. |
+| `MaxDistanceCm` | 0 | Most distance from the owner to a target. 0 means no limit. |
 
-Priorities: `Low`, `Normal`, `High`, `Critical`.
+On `UNsInteractionViewSensor`:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `TraceDistanceCm` | 300 | Length of the trace. |
+| `TraceChannel` | Visibility | Channel of the trace. |
+| `AssistAngleDeg` | 0 | Half-angle of the assist cone. 0 turns the aim assist off. |
+| `AssistStickDeg` | 2 | Extra angle that keeps the focused part. |
+
+On `FNsInteractionOption`:
+
+| Field | Default | Effect |
+|---|---|---|
+| `Target` | set by the component | The actor and the part. |
+| `ActionId` | None | Name of the action that `ExecuteInteraction` runs. |
+| `TapActionId` | None | Action of a short press on a hold option. |
+| `Title` | empty | Short name of the target. |
+| `Prompt` | empty | Text of the action, or the reason that it is not available. |
+| `bEnabled` | true | False shows the prompt and runs nothing. |
+| `Input` | Press | `Press` or `Hold`. |
+| `HoldSeconds` | 0.5 | Seconds of a hold. |
+| `Authority` | Local | `Local` or `Server`. |
+| `PromptLocation` | zero | World point of the prompt. Zero means the target location. |
+| `Priority` | 0 | A higher priority wins over a nearer target. |
 
 ## Debug
 
-- Turn on `bLogInteractionResolution` on the component.
-- Log category: `LogNsInteraction`. Errors show when the resolved target left the queue, is out of range, or its action failed.
-- Read `InteractionQueue` on the component in the Details panel during play.
+- Read `GetTargets`, `HasOption`, and `GetOption` in a debugger or a Blueprint print.
+- Read `GetFocus` on the view sensor.
+- Run the test `NsInteraction.ViewSensor.AimAssist` in Session Frontend.
 
 ## Limits
 
-- No networking of its own. The game sends the server call for an `Authority` candidate.
-- If a C++ class implements the interface, the component calls the C++ functions directly. A Blueprint child that overrides the same event does not run. Implement the events in one place only.
-- The component ticks only with the view trace on, or during a hold.
+- One option for each target. Two actions on one part need one option at a time, or two parts.
+- The view sensor gives one target at most.
+- The aim assist measures the bounds box of a part, not its exact shape.
