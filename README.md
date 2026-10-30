@@ -33,18 +33,19 @@
 <!-- GH_ONLY_END -->
 
 ## 👀 Summary
-NsInteraction lets an actor, usually the player, use other actors. A sensor gives the targets. The interaction component asks each target for its option, keeps the best one, and runs it on a press or at the end of a hold.
+NsInteraction lets an actor, usually the player, use other actors. A sensor gives the targets. The interaction component asks each target for its option, keeps the best one, and runs it on a press or at the end of a hold. A ready-made interactable actor covers the simple case with no code.
 
-NsInteraction has no UI, no input binding, and no replication. The game shows the prompt, binds the input, and sends the server requests. NsInteraction depends on no other plugin.
+NsInteraction has no UI and no input binding. Your game shows the prompt and calls the component from its input. NsInteraction depends on no other plugin.
 
 ## 📦 Features
 - **One interface**: Implement `INsInteractable` in C++ or Blueprint. Return an option, then run it.
-- **Press or hold**: Hold for one action, tap for another.
+- **Interactable actor**: Make a Blueprint child of `ANsInteractableActor`, set its option in the Details panel, and handle `On Interact`.
+- **Press or hold**: Hold for one action, and tap for another.
 - **More than one action**: Give each part of an actor its own option and action name.
 - **Disabled options**: Show the prompt with the reason, and run nothing.
-- **Aim sensor**: A trace from the camera, with an optional aim assist cone.
+- **Aim sensor**: A trace from the camera of the owner, with an optional aim assist cone.
 - **Nearby sensor**: Bind any collision overlap, or give the targets from game code.
-- **Server requests**: A server option builds again on the server, so the server state decides.
+- **Server requests**: A server option goes to the server through a built-in RPC. The server builds the option again, so the server state decides.
 - **Custom scoring**: Override `ScoreOption` to change which option wins.
 
 ## ⚙️ Requirements
@@ -53,15 +54,23 @@ Unreal Engine 5.7+
 ## 🛠️ Installation
 1. **Clone** or download this repository.
 2. Copy the `NsInteraction` folder into the `Plugins` folder of your project.
-3. Add `"NsInteraction"` to the module dependencies in `Build.cs`.
+3. For C++, add `"NsInteraction"` to the dependencies of your game module in `Build.cs`.
 4. Generate the project files and enable the plugin.
-5. Add a `UNsInteractionComponent` and a sensor to the actor that interacts.
-
-The plugin has no project settings.
 
 ## 🚀 Getting Started
+1. Make a Blueprint class with the parent `NsInteractableActor`. Add a static mesh to it.
+2. Implement the `On Interact` event, and place the actor in the level.
+3. On the player pawn, add the **Ns Interaction** and **Ns Interaction View Sensor** components. The pawn needs a camera.
+4. In the input of the pawn, call `Begin Interact` when the input starts and `End Interact` when it ends.
+5. Bind `On Option Changed` to show the prompt.
+
+In C++, implement the interface on any actor:
+
 ```cpp
+// MyLever.h
+#include "GameFramework/Actor.h"
 #include "NsInteractable.h"
+#include "MyLever.generated.h"
 
 UCLASS()
 class AMyLever : public AActor, public INsInteractable
@@ -69,7 +78,6 @@ class AMyLever : public AActor, public INsInteractable
     GENERATED_BODY()
 
 public:
-    //~ Begin INsInteractable Interface
     virtual bool GetInteractionOption_Implementation(AActor* Interactor, UPrimitiveComponent* Part, FNsInteractionOption& OutOption) override
     {
         OutOption.Prompt = NSLOCTEXT("MyGame", "PullLever", "Pull the lever");
@@ -81,44 +89,33 @@ public:
         bPulled = !bPulled;
         return true;
     }
-    //~ End INsInteractable Interface
 
-    /** True after the pull */
     bool bPulled = false;
 };
 ```
 
-On the player, call `BeginInteract` when the input starts and `EndInteract` when it ends. Bind `OnOptionChanged` to show the prompt, and read `GetHoldProgress` for a hold bar.
-
-In Blueprint, add the `NsInteractable` interface in Class Settings, then implement `Get Interaction Option` and `Execute Interaction`.
-
 ## 🎯 Sensors
 | Sensor | Setup |
 |---|---|
-| Aim | Add a `UNsInteractionViewSensor` and call `SetViewSource` with the camera |
-| Nearby | Add a sphere or box collision. Bind its overlaps to `HandleSensorBeginOverlap` and `HandleSensorEndOverlap` |
+| Aim | Add a `UNsInteractionViewSensor`. It uses the first camera of the owner, or the component from `SetViewSource` |
+| Nearby | Add a sphere or box collision. Pass its overlap events to `HandleSensorBeginOverlap` and `HandleSensorEndOverlap` |
 | Game code | Call `AddTarget`, `RemoveTarget`, or `SetTargets` |
 
 ## 🔧 API
-### Types
-- `INsInteractable` – The interface of an actor that can be used: `GetInteractionOption` and `ExecuteInteraction`.
-- `FNsInteractionOption` – The target, the action name, the prompt, `bEnabled`, press or hold, the authority, and the priority.
-
-### Main Functions
+- `INsInteractable` – The interface of a usable actor: `GetInteractionOption`, `ExecuteInteraction`, `OnInteractorEnter`, and `OnInteractorExit`.
+- `ANsInteractableActor` – An actor with one option from the Details panel. It fires `On Interact` and `OnInteracted`.
+- `FNsInteractionOption` – The target, the action name, the texts, `bEnabled`, press or hold, the authority, and the priority.
 - `UNsInteractionComponent::BeginInteract` / `EndInteract` – Start and end the input.
-- `UNsInteractionComponent::OnOptionChanged` – Fires when the best option changes.
-- `UNsInteractionComponent::OnServerRequest` / `ExecuteOnServer` – Send a server option through a server RPC of the game, then run it on the server.
-- `UNsInteractionComponent::ScoreOption` – Override to change which option wins.
-- `UNsInteractionViewSensor::IsPartInView` – Check a client request on the server.
-
-### Settings
-- `RefreshInterval`, `MaxDistanceCm` – On the interaction component.
-- `TraceDistanceCm`, `TraceChannel`, `AssistAngleDeg`, `AssistStickDeg` – On the view sensor.
+- `UNsInteractionComponent::OnOptionChanged` – Fires when the shown prompt changes.
+- `UNsInteractionComponent::OnServerRequest` / `ExecuteOnServer` – Fires for a server option on a client, and runs a request on the server.
+- `UNsInteractionComponent::ScoreOption` – Override it to change which option wins.
+- `UNsInteractionViewSensor::IsPartInView` – Check a client aim on the server.
 
 ## 🚧 Limits
-- One option for each target. Two actions on one part need one option at a time, or two parts.
+- One option for each target at a time. For two actions on one part, change the option, or use two parts.
 - The view sensor gives one target at most.
 - The aim assist measures the bounds box of a part, not its exact shape.
+- The built-in server request does not check the aim of the client.
 
 ## 📚 Documentation
 - [User Guide](https://mykaadev.github.io/plugins/nsinteraction/user-guide/) – Setup, common tasks, settings, and debug tools.
