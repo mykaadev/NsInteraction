@@ -6,6 +6,8 @@ NsInteraction lets an actor, usually the player, use other actors: doors, levers
 
 NsInteraction has no UI and no input binding. Your game shows the prompt and calls the component from its input. NsInteraction depends on no other plugin.
 
+[![A room from above: the player aims at a chest, and the prompt asks for a hold](Showcase/img/aimandhold.png)](Showcase/AimAndHold.html)
+
 ## Setup
 
 1. Copy the `NsInteraction` folder into the `Plugins` folder of your project.

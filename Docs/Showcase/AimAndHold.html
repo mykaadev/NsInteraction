@@ -1,0 +1,14 @@
+<!-- Showcase for the website: the docs link to this file, and the site turns the list into a top-down room with a player. -->
+<!-- data-box is "x y width height" in cm (x and y are the center). The other data-* attributes are fields of the interaction option. -->
+<figure class="ns-interact" data-room="1000 600" data-player="500 470" data-aim-at="760 330" data-trace-distance-cm="300" data-assist-angle-deg="8" data-assist-stick-deg="2" data-max-distance-cm="0" data-sphere-cm="250" data-refresh-interval="0">
+  <figcaption>A room from above, in centimeters. Drag the player, or press on the room to aim. Use the arrow keys or WASD to walk. Hold E, or hold the Interact button. The pick, the score, and the hold use the rules of the interaction component and the view sensor. The view is 2D and has one machine. The aim assist starts at 8 degrees here, and its default is 0.</figcaption>
+  <ul>
+    <li data-box="500 40 160 30" data-title="Door" data-prompt="Open" data-action="Open"><b>Door</b> Press to open.</li>
+    <li data-box="260 140 30 30" data-actor="NsInteractableActor"><b>Button</b> An NsInteractableActor with the default option: action Use, prompt "Use", authority Server.</li>
+    <li data-box="100 300 30 60" data-prompt="Pull the lever" data-action="Pull"><b>Lever</b> Press to pull the lever. It has no title.</li>
+    <li data-box="860 200 100 60" data-title="Chest" data-prompt="Open" data-action="Open" data-input="Hold" data-hold="1" data-tap="Inspect"><b>Chest</b> Hold for 1 s to open. A short press runs Inspect.</li>
+    <li data-box="760 330 24 24" data-title="Key" data-prompt="Take" data-action="Take" data-priority="1"><b>Key</b> Press to take. Priority 1 wins over a nearer target.</li>
+    <li data-box="140 530 140 30" data-title="Gate" data-prompt="Needs a key" data-action="Open" data-enabled="false"><b>Gate</b> Disabled. The prompt shows the reason, and the input runs nothing.</li>
+    <li data-box="560 270 90 90" data-interactable="false"><b>Crate</b> Not interactable. It blocks the trace.</li>
+  </ul>
+</figure>
