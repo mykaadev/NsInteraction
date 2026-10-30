@@ -119,7 +119,7 @@ public:
 
 ## 📚 Documentation
 - [User Guide](https://mykaadev.github.io/plugins/nsinteraction/user-guide/) – Setup, common tasks, settings, and debug tools.
-- [Technical Documentation](https://mykaadev.github.io/plugins/nsinteraction/tech-documentation/) – Architecture, lifetime, extension points, and tests.
+- [Technical Documentation](https://mykaadev.github.io/plugins/nsinteraction/tech-documentation/) – Architecture, lifetime, and extension points.
 
 <!-- GH_ONLY_START -->
 ## ❤️ Credits

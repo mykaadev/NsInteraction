@@ -13,7 +13,7 @@ The `.uplugin` file lists no plugin dependencies.
 ### Folders
 
 - `Source/NsInteraction/Public` – `NsInteraction.h`, `NsInteractionTypes.h`, `NsInteractable.h`, `NsInteractableActor.h`, `NsInteractionComponent.h`, `NsInteractionViewSensor.h`.
-- `Source/NsInteraction/Private` – the `.cpp` file of each header, and `Tests/NsInteractionViewSensorTest.cpp`.
+- `Source/NsInteraction/Private` – the `.cpp` file of each header.
 
 ### Main Classes
 
@@ -100,20 +100,3 @@ The `.uplugin` file lists no plugins.
 - `ExecuteOnServer` checks the reach, the option, `bEnabled`, and the action name. It does not check the aim. Call `IsPartInView` in your own RPC for an aim check. `ExtraAngleDeg` gives room for the lag of the replicated view.
 - `ANsInteractableActor` sets `bReplicates` to true. Its `Option` does not replicate.
 - The view sensor runs only on the machine that controls the pawn.
-
-## Testing
-
-| Test | What it checks |
-|---|---|
-| `NsInteraction.ViewSensor.AimAssist` | The exact aim, the assist cone, the extra angle, the reach, the assist off, the edge of a large part, and a wall in front |
-
-The test uses `EditorContext` and `EngineFilter`. It makes its own game world with `UWorld::CreateWorld` and calls only `IsPartInView`.
-
-Run it in **Session Frontend > Automation**, filter `NsInteraction`. Or start the editor with `-ExecCmds="Automation RunTests NsInteraction"`.
-
-## Change Rules
-
-- Do not rename the fields of `FNsInteractionOption` or the properties of the components and `ANsInteractableActor`. Blueprints and levels save them by name.
-- Keep the signatures of `INsInteractable`. Blueprint implementations of the interface break when a signature changes.
-- Give a new option field a default that keeps the current behavior.
-- Keep `ServerRequestAction` and `ExecuteOnServer` in step. The RPC passes only the actor, the part, and the action name, and the server builds the rest.
