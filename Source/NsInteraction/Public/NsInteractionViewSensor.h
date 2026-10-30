@@ -27,7 +27,7 @@ public:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     //~ End UActorComponent Interface
 
-    /** Sets the component that the trace starts from and points along, such as a first-person camera */
+    /** Sets the component that the trace starts from and points along. Begin Play uses the first camera of the owner when none is set */
     UFUNCTION(BlueprintCallable, Category = "Interaction|View")
     void SetViewSource(class USceneComponent* InViewSource);
 

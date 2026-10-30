@@ -101,6 +101,10 @@ private:
     /** Runs one action of an option: nothing when the option is disabled, a server request when it needs the server, otherwise the action */
     void RunAction(const FNsInteractionOption& Candidate, FName ActionId);
 
+    /** Owner: asks the server to run an action. Sent when Send Server Requests is true */
+    UFUNCTION(Server, Reliable)
+    void ServerRequestAction(class AActor* Actor, class UPrimitiveComponent* Part, FName ActionId);
+
     /** Returns true when the target is in reach of the owner */
     bool IsInReach(const FNsInteractionTarget& Target) const;
 
@@ -123,6 +127,10 @@ public:
     /** Seconds between two refreshes while there are targets. 0 refreshes only when the targets change or the input starts */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction", meta = (ClampMin = "0.0", Units = "s"))
     float RefreshInterval;
+
+    /** True sends a server option to the server through this component. False only fires On Server Request, and the game sends it */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction")
+    bool bSendServerRequests;
 
     /** Most distance from the owner to a target. 0 means no limit */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction", meta = (ClampMin = "0.0", Units = "cm"))

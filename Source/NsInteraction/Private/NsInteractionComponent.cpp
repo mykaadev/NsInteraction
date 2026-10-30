@@ -9,6 +9,7 @@
 
 UNsInteractionComponent::UNsInteractionComponent()
     : RefreshInterval(0.f)
+    , bSendServerRequests(true)
     , MaxDistanceCm(0.f)
     , bHasOption(false)
     , HoldStartSeconds(0.0)
@@ -16,6 +17,7 @@ UNsInteractionComponent::UNsInteractionComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.bStartWithTickEnabled = false;
+    SetIsReplicatedByDefault(true);
 }
 
 void UNsInteractionComponent::TickComponent(const float DeltaTime, const ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -284,10 +286,19 @@ void UNsInteractionComponent::RunAction(const FNsInteractionOption& Candidate, c
     if (Candidate.Authority == ENsInteractionAuthority::Server && IsValid(Interactor) && !Interactor->HasAuthority())
     {
         OnServerRequest.Broadcast(Request);
+        if (bSendServerRequests)
+        {
+            ServerRequestAction(Request.Target.Actor, Request.Target.Part, ActionId);
+        }
         return;
     }
 
     INsInteractable::Execute_ExecuteInteraction(Candidate.Target.Actor, GetOwner(), Request);
+}
+
+void UNsInteractionComponent::ServerRequestAction_Implementation(AActor* const Actor, UPrimitiveComponent* const Part, const FName ActionId)
+{
+    ExecuteOnServer(Actor, Part, ActionId);
 }
 
 bool UNsInteractionComponent::IsInReach(const FNsInteractionTarget& Target) const

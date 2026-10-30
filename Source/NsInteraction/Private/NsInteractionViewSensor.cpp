@@ -4,6 +4,7 @@
 
 #include "NsInteractable.h"
 #include "NsInteractionComponent.h"
+#include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/OverlapResult.h"
@@ -25,6 +26,11 @@ void UNsInteractionViewSensor::BeginPlay()
     if (!IsValid(Interaction))
     {
         Interaction = GetOwner()->FindComponentByClass<UNsInteractionComponent>();
+    }
+    // Without a view source, the trace starts from the camera of the owner, such as a first-person camera
+    if (!IsValid(ViewSource))
+    {
+        ViewSource = GetOwner()->FindComponentByClass<UCameraComponent>();
     }
 }
 
